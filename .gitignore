@@ -1,0 +1,11 @@
+# Python compilation files
+__pycache__/
+*.pyc
+
+# Virtual environment files
+.venv/
+venv/
+env/
+
+# Files created by our bot
+downloads/
