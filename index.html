@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Download Autobot Dashboard</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f9; }
+        .container { max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); }
+        h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        input[type="text"] { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { background-color: #3498db; color: white; padding: 12px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; transition: background-color 0.3s; }
+        button:hover { background-color: #2980b9; }
+        #status-message { margin-top: 20px; padding: 15px; border-radius: 4px; background-color: #ecf0f1; border-left: 5px solid #3498db; }
+        .success { border-left-color: #27ae60; background-color: #e6ffe6; }
+        .error { border-left-color: #e74c3c; background-color: #ffe6e6; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Download Autobot</h1>
+        <p>Paste the series URL from thenkiri.com below to start the background download job.</p>
+        
+        <form id="download-form">
+            <input type="text" id="series-url" name="url" placeholder="e.g., https://thenkiri.com/my-new-series/" required>
+            <button type="submit">Start Download</button>
+        </form>
+
+        <div id="status-message">
+            Status: Ready to receive link.
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('download-form').addEventListener('submit', async function(event) {
+            event.preventDefault(); // Stop the form from submitting normally
+            
+            const urlInput = document.getElementById('series-url');
+            const statusDiv = document.getElementById('status-message');
+            const seriesUrl = urlInput.value;
+
+            // Prepare the data to be sent (FastAPI expects form data)
+            const formData = new URLSearchParams();
+            formData.append('url', seriesUrl);
+
+            statusDiv.className = '';
+            statusDiv.textContent = 'Status: Sending request to API...';
+
+            try {
+                // Send the POST request to the FastAPI endpoint
+                const response = await fetch('http://127.0.0.1:8000/api/download', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: formData.toString()
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.status === 'success') {
+                    statusDiv.className = 'success';
+                    statusDiv.innerHTML = `✅ **Job Started!** The bot is running in the background.<br>Job ID: <strong>${data.job_id}</strong>`;
+                    
+                    // Clear the input field after successful submission
+                    urlInput.value = ''; 
+                    
+                } else {
+                    // Handle errors returned by the API (e.g., non-thenkiri.com URL)
+                    statusDiv.className = 'error';
+                    statusDiv.innerHTML = `❌ **API Error:** ${data.message || 'Unknown error occurred.'}`;
+                }
+
+            } catch (error) {
+                // Handle network errors (e.g., API server is down)
+                statusDiv.className = 'error';
+                statusDiv.innerHTML = `🛑 **Network Error:** Could not connect to the API. Make sure the Uvicorn server is running.`;
+            }
+        });
+    </script>
+</body>
+</html>
