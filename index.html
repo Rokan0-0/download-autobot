@@ -3,78 +3,86 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Download Autobot Dashboard</title>
+    <title>Download Autobot Command Center</title>
     <style>
-        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f9; }
-        .container { max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); }
-        h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
-        input[type="text"] { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        button { background-color: #3498db; color: white; padding: 12px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; transition: background-color 0.3s; }
+        body { font-family: 'Segoe UI', sans-serif; margin: 0; background-color: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        .container { width: 500px; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+        h1 { color: #1a1a1a; margin-top: 0; font-size: 24px; text-align: center; }
+        .badge { background: #e1e1e1; color: #555; padding: 4px 8px; border-radius: 4px; font-size: 12px; vertical-align: middle; }
+        
+        form { margin-top: 25px; }
+        input[type="text"] { width: 100%; padding: 15px; border: 2px solid #eee; border-radius: 8px; font-size: 16px; box-sizing: border-box; transition: 0.3s; }
+        input[type="text"]:focus { border-color: #3498db; outline: none; }
+        
+        button { width: 100%; background-color: #3498db; color: white; padding: 15px; margin-top: 15px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: bold; transition: 0.2s; }
         button:hover { background-color: #2980b9; }
-        #status-message { margin-top: 20px; padding: 15px; border-radius: 4px; background-color: #ecf0f1; border-left: 5px solid #3498db; }
-        .success { border-left-color: #27ae60; background-color: #e6ffe6; }
-        .error { border-left-color: #e74c3c; background-color: #ffe6e6; }
+        
+        #status-box { margin-top: 25px; padding: 15px; border-radius: 8px; display: none; }
+        .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .info { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+        .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+
+        .queue-info { margin-top: 10px; font-size: 14px; color: #666; text-align: center; }
     </style>
 </head>
 <body>
+
     <div class="container">
-        <h1>🤖 Download Autobot</h1>
-        <p>Paste the series URL from thenkiri.com below to start the background download job.</p>
+        <h1>🤖 Autobot Command Center <span class="badge">v2.0</span></h1>
+        <p style="text-align: center; color: #666;">Queue your series downloads below.</p>
         
         <form id="download-form">
-            <input type="text" id="series-url" name="url" placeholder="e.g., https://thenkiri.com/my-new-series/" required>
-            <button type="submit">Start Download</button>
+            <input type="text" id="series-url" name="url" placeholder="Paste Thenkiri URL here..." required>
+            <button type="submit">Add to Queue</button>
         </form>
 
-        <div id="status-message">
-            Status: Ready to receive link.
-        </div>
+        <div id="status-box"></div>
     </div>
 
     <script>
         document.getElementById('download-form').addEventListener('submit', async function(event) {
-            event.preventDefault(); // Stop the form from submitting normally
+            event.preventDefault();
             
             const urlInput = document.getElementById('series-url');
-            const statusDiv = document.getElementById('status-message');
+            const statusBox = document.getElementById('status-box');
             const seriesUrl = urlInput.value;
 
-            // Prepare the data to be sent (FastAPI expects form data)
+            // Reset UI
+            statusBox.style.display = 'block';
+            statusBox.className = 'info';
+            statusBox.textContent = 'Communicating with HQ...';
+
             const formData = new URLSearchParams();
             formData.append('url', seriesUrl);
 
-            statusDiv.className = '';
-            statusDiv.textContent = 'Status: Sending request to API...';
-
             try {
-                // Send the POST request to the FastAPI endpoint
                 const response = await fetch('http://127.0.0.1:8000/api/download', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    },
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: formData.toString()
                 });
 
                 const data = await response.json();
 
                 if (response.ok && data.status === 'success') {
-                    statusDiv.className = 'success';
-                    statusDiv.innerHTML = `✅ **Job Started!** The bot is running in the background.<br>Job ID: <strong>${data.job_id}</strong>`;
+                    statusBox.className = 'success';
                     
-                    // Clear the input field after successful submission
-                    urlInput.value = ''; 
+                    // Different messages based on queue position
+                    if (data.message.includes("immediately")) {
+                        statusBox.innerHTML = `✅ <strong>Started!</strong> The worker was idle, so your download is running now.`;
+                    } else {
+                        statusBox.innerHTML = `zzz <strong>Queued.</strong> You are #${data.queue_position} in line. It will start automatically.`;
+                    }
                     
+                    urlInput.value = ''; // Clear input
                 } else {
-                    // Handle errors returned by the API (e.g., non-thenkiri.com URL)
-                    statusDiv.className = 'error';
-                    statusDiv.innerHTML = `❌ **API Error:** ${data.message || 'Unknown error occurred.'}`;
+                    statusBox.className = 'error';
+                    statusBox.textContent = `❌ Error: ${data.message}`;
                 }
 
             } catch (error) {
-                // Handle network errors (e.g., API server is down)
-                statusDiv.className = 'error';
-                statusDiv.innerHTML = `🛑 **Network Error:** Could not connect to the API. Make sure the Uvicorn server is running.`;
+                statusBox.className = 'error';
+                statusBox.textContent = `🛑 Server Offline. Is Uvicorn running?`;
             }
         });
     </script>
