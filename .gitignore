@@ -9,3 +9,8 @@ env/
 
 # Files created by our bot
 downloads/
+
+# PyInstaller
+build/
+dist/
+*.spec
