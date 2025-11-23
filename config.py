@@ -5,7 +5,10 @@
 DOWNLOAD_HOSTS = [
     "downloadwella.com",
     "wetafiles.com",
-    # Add new domains here (e.g., "newhost.com")
+    "animepahe.si",
+    "pahe.win",
+    "kwik.cx",
+    "kwik.si"
 ]
 
 # You can add other global settings here later

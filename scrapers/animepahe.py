@@ -4,52 +4,51 @@ import time
 import os
 from playwright.sync_api import TimeoutError
 
-# We need to define the hosts specific to this scraper
-PAHE_HOSTS = ["animepahe.si", "pahe.win", "kwik.cx"]
+# Rich UI imports
+from rich.console import Console
+from rich.theme import Theme
+
+custom_theme = Theme({"info": "cyan", "success": "bold green", "error": "bold red", "warning": "yellow"})
+console = Console(theme=custom_theme)
 
 def save_file(download):
     """Helper to save the file."""
     file_path = os.path.join("downloads", download.suggested_filename)
-    print(f"⬇️ Saving to {file_path}...")
-    download.save_as(file_path)
-    print(f"✅ Success! File saved.")
+    with console.status(f"[bold green]Downloading {download.suggested_filename}...[/bold green]", spinner="dots"):
+        download.save_as(file_path)
+    console.print(f"[success]✅ Success! File saved to:[/success] {file_path}")
 
 def handle_kwik_page(page):
     """
     Handles the final Kwik.cx download page.
-    Kwik is tricky: It often requires a specific button click or waiting for JS.
     """
-    print("⚠️ Landed on Kwik.cx! Attempting to bypass...")
+    console.print("[info]⚠️ Landed on Kwik.cx! Attempting to bypass...[/info]")
     
     try:
-        # Kwik usually has a specific download form or button.
-        # We look for a button that likely contains "Download"
-        # Sometimes it's an input type="submit" inside a form
-        
-        # Wait for the page to fully load its scripts
         page.wait_for_load_state('networkidle')
         
-        # Try 1: Generic "Download" text
+        # STRATEGY 1: Look for the specific download form button
         try:
-            with page.expect_download(timeout=10000) as download_info:
-                page.get_by_text("Download", exact=False).first.click()
-            return download_info.value
-        except:
-            print("Generic 'Download' text failed. Trying form submission...")
-
-        # Try 2: The specific Kwik form button (often inside a <form>)
-        # This selector finds a button inside a form
-        try:
+            console.print("Attempting Kwik Strategy 1 (Form Button)...")
             with page.expect_download(timeout=10000) as download_info:
                 page.locator("form button").first.click()
             return download_info.value
         except:
             pass
 
-        raise Exception("Could not trigger download on Kwik.")
+        # STRATEGY 2: Look for generic "Download" text
+        try:
+            console.print("Attempting Kwik Strategy 2 (Text Match)...")
+            with page.expect_download(timeout=10000) as download_info:
+                page.get_by_text("Download", exact=False).first.click()
+            return download_info.value
+        except:
+            pass
+        
+        raise Exception("All Kwik bypass strategies failed.")
 
     except Exception as e:
-        print(f"❌ Kwik Bypass Failed: {e}")
+        console.print(f"[error]❌ Kwik Bypass Failed: {e}[/error]")
         raise e
 
 def download_single_episode(context, url):
@@ -61,65 +60,81 @@ def download_single_episode(context, url):
 
     page = context.new_page()
     try:
-        print(f"Loading AnimePahe Play Page: {url}")
+        console.print(f"[info]Loading AnimePahe Play Page...[/info]")
         page.goto(url)
         page.wait_for_load_state()
 
-        # 1. Find and Click the "Download" Menu
-        # Note: You might need to adjust this text if the button has no text
-        print("Looking for Download menu...")
-        page.get_by_text("Download", exact=False).click()
+        # 1. Click the "Download" Menu to reveal options
+        console.print("Opening Download Menu...")
+        try:
+            page.get_by_text("Download", exact=False).click()
+            # Wait for the menu to animate in
+            page.wait_for_timeout(1000) 
+        except Exception as e:
+            console.print(f"[warning]Menu issue: {e}. Checking if items are already visible...[/warning]")
+
+        # 2. Find the Resolution Link
+        console.print("Looking for resolution links...")
         
-        # 2. Select Resolution (We default to 720p, or fall back to 1080p)
-        print("Menu opened. Looking for resolution links...")
+        # FIX: We only look for 'a' tags (links), ignoring 'button' tags
+        # This prevents it from clicking "kwik" or "Episode 1"
+        all_links = page.locator("a.dropdown-item")
         
-        # We try to find a link containing "720p" (usually the sweet spot for AnimePahe)
-        # Note: These open in a new tab (Ad/Redirect)
-        res_link = page.get_by_text("720p", exact=False).first
+        # Debug print to show what LINKS we found (not buttons)
+        console.print(f"[dim]Found {all_links.count()} potential download links.[/dim]")
+
+        # PREFERENCE LOGIC: Try 720p first, then 1080p
+        res_link = all_links.filter(has_text="720p").first
+        
         if not res_link.is_visible():
-            print("720p not found, trying 1080p...")
-            res_link = page.get_by_text("1080p", exact=False).first
+            console.print("[warning]720p not found, trying 1080p...[/warning]")
+            res_link = all_links.filter(has_text="1080p").first
             
         if not res_link.is_visible():
-            raise Exception("Could not find any resolution links (720p/1080p).")
+            # Fallback: Just pick the FIRST link (not button) available
+            if all_links.count() > 0:
+                 console.print("[warning]Specific res not found. Picking first link...[/warning]")
+                 res_link = all_links.first
+            else:
+                raise Exception("Could not find any actual download links.")
 
-        print("Clicking resolution link...")
+        res_text = res_link.text_content().strip()
+        console.print(f"Selected Resolution: [bold]{res_text}[/bold]")
         
-        # This click triggers the redirect chain
+        # 3. Click and Handle the Popup
+        # We use force=True in case the menu is slightly covered
         with page.expect_popup() as popup_info:
-            res_link.click()
+            res_link.click(force=True)
         
         ad_page = popup_info.value
-        ad_page.wait_for_load_state()
-        print(f"Redirected to: {ad_page.url}")
-
-        # 3. Navigate the Redirect Chain (Pahe.win -> Kwik)
-        # Sometimes it goes straight to Kwik, sometimes it has an intermediate page
-        # We wait and see if we land on Kwik
+        console.print(f"Redirected to: [dim]{ad_page.url}[/dim]")
         
+        # 4. Navigate the Redirect Chain (Pahe.win -> Kwik)
         final_download_object = None
         
-        # We give it 15 seconds to settle on the final domain
-        for _ in range(15):
-            if "kwik" in ad_page.url:
-                print("We are on Kwik!")
-                final_download_object = handle_kwik_page(ad_page)
-                break
-            elif "pahe" in ad_page.url:
-                print("On intermediate ad page... waiting for redirect...")
-                # Sometimes you have to click "Continue" on the ad page
-                try:
-                    ad_page.get_by_text("Continue", exact=False).click(timeout=2000)
-                except:
-                    pass
+        console.print("Waiting for Kwik.cx redirection...")
+        for _ in range(20):
+            try:
+                current_url = ad_page.url
+                if "kwik" in current_url:
+                    final_download_object = handle_kwik_page(ad_page)
+                    break
+                elif "pahe.win" in current_url:
+                    try:
+                        ad_page.get_by_text("Continue", exact=False).click(timeout=1000)
+                    except:
+                        pass
+            except:
+                pass
             time.sleep(1)
             
         if final_download_object:
             save_file(final_download_object)
         else:
-            print("❌ Failed to reach Kwik or start download.")
+            console.print("[error]❌ Failed to reach Kwik or start download.[/error]")
+            if not ad_page.is_closed(): ad_page.close()
 
     except Exception as e:
-        print(f"❌ Error: {e}")
+        console.print(f"[error]❌ Error: {e}[/error]")
     finally:
-        page.close()
+        if not page.is_closed(): page.close()
