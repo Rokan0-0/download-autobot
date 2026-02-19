@@ -2,6 +2,7 @@
 
 import time
 import os
+import re
 from playwright.sync_api import TimeoutError
 from config import DOWNLOAD_HOSTS
 
@@ -127,20 +128,28 @@ def download_series(context, url):
 
     # 1. SMART EXTRACT SERIES NAME FROM URL
     try:
-        # Get the full slug part (e.g. "the-mighty-nein-s01-...")
         full_slug = url.rstrip('/').split('/')[-1].lower()
         parts = full_slug.split('-')
         
-        # Default to the first word
-        series_slug = parts[0]
+        # Extract series name keywords AND the season tag separately
+        series_name_parts = []
+        season_tag = None
+        for part in parts:
+            if re.match(r'^s\d{1,2}$', part):
+                season_tag = part  # e.g. "s02"
+                break
+            series_name_parts.append(part)
         
-        # If the first word is a generic stop word, use the second word instead
-        if series_slug in ['the', 'a', 'an'] and len(parts) > 1:
-            series_slug = parts[1]
-            
-        console.print(f"🔎 Series Keyword identified: [bold cyan]'{series_slug}'[/bold cyan]")
+        # Filter out generic stop words
+        stop_words = {'the', 'a', 'an', 'download', 'complete', 'tv', 'series'}
+        series_keywords = [p for p in series_name_parts if p not in stop_words]
+        
+        kw_display = ' + '.join(series_keywords)
+        season_display = season_tag.upper() if season_tag else 'ANY'
+        console.print(f"🔎 Series match: [bold cyan]keywords='{kw_display}', season={season_display}[/bold cyan]")
     except:
-        series_slug = ""
+        series_keywords = []
+        season_tag = None
 
     temp_page = context.new_page()
     try:
@@ -162,17 +171,20 @@ def download_series(context, url):
 
         already_downloaded = False
         for filename in existing_files:
-            # Check if the filename actually belongs to THIS series
-            if series_slug and series_slug not in filename.lower():
-                continue 
-            
+            fn_lower = filename.lower()
+            # Must match ALL series keywords
+            if series_keywords and not all(kw in fn_lower for kw in series_keywords):
+                continue
+            # Must match the season tag if we extracted one
+            if season_tag and season_tag not in fn_lower:
+                continue
             # Check if the episode number matches
             if any(tag in filename for tag in ep_tag_variants):
                 already_downloaded = True
                 break
         
         if already_downloaded:
-            console.print(f"⏩ [dim]Skipping Episode {i + 1}. File found for '{series_slug}'.[/dim]")
+            console.print(f"⏩ [dim]Skipping Episode {i + 1}. File already exists.[/dim]")
             time.sleep(0.2)
             continue 
         

@@ -1,10 +1,10 @@
 # app.py - The Pro Edition (Now with AnimePahe Support)
 
 import sys
-import threading
 import time
 import os
 import socket
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -24,10 +24,9 @@ app.add_middleware(
 )
 
 # --- GLOBAL STATE ---
-JOB_QUEUE = []
+MAX_CONCURRENT = 3
 ACTIVE_JOBS = {}
-IS_WORKER_RUNNING = False
-CURRENT_JOB = None
+executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT)
 
 # --- HELPER: AUTO-INSTALL BROWSERS ---
 def install_browsers_if_needed():
@@ -55,43 +54,34 @@ def get_local_ip():
     except Exception:
         return "127.0.0.1"
 
-# --- WORKER THREAD ---
-def process_queue_worker():
-    global IS_WORKER_RUNNING, CURRENT_JOB
-    print("\n👷 Worker Thread Started.")
-    
-    while len(JOB_QUEUE) > 0:
-        url_data = JOB_QUEUE.pop(0)
-        job_id = url_data['id']
-        url = url_data['url']
-        job_type = url_data.get('type', 'nkiri') # Default to nkiri
-        
-        CURRENT_JOB = url
-        ACTIVE_JOBS[job_id] = "RUNNING"
-        print(f"\n🚀 Processing Job {job_id} [{job_type}]: {url}")
+# --- JOB RUNNER (runs per-job in a thread pool) ---
+def run_single_job(job_data):
+    """Process a single download job. Called by the ThreadPoolExecutor."""
+    job_id = job_data['id']
+    url = job_data['url']
+    job_type = job_data.get('type', 'nkiri')
 
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                context = browser.new_context()
-                
-                # --- ROUTER LOGIC ---
-                if job_type == "nkiri":
-                    nkiri.download_series(context, url)
-                elif job_type == "animepahe":
-                    animepahe.download_single_episode(context, url)
-                # --------------------
-            
-            ACTIVE_JOBS[job_id] = "COMPLETED"
-            print(f"✅ Job {job_id} Finished.")
+    ACTIVE_JOBS[job_id] = "RUNNING"
+    print(f"\n🚀 Processing Job {job_id} [{job_type}]: {url}")
 
-        except Exception as e:
-            print(f"❌ Job {job_id} Failed: {e}")
-            ACTIVE_JOBS[job_id] = "FAILED"
-    
-    CURRENT_JOB = None
-    IS_WORKER_RUNNING = False
-    print("💤 Queue empty. Worker Thread sleeping.")
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context()
+
+            # --- ROUTER LOGIC ---
+            if job_type == "nkiri":
+                nkiri.download_series(context, url)
+            elif job_type == "animepahe":
+                animepahe.download_single_episode(context, url)
+            # --------------------
+
+        ACTIVE_JOBS[job_id] = "COMPLETED"
+        print(f"✅ Job {job_id} Finished.")
+
+    except Exception as e:
+        print(f"❌ Job {job_id} Failed: {e}")
+        ACTIVE_JOBS[job_id] = "FAILED"
 
 # --- ROUTES ---
 
@@ -105,15 +95,14 @@ def home():
 
 @app.get("/api/status")
 def get_system_status():
+    running = sum(1 for s in ACTIVE_JOBS.values() if s == "RUNNING")
     return {
-        "worker_running": IS_WORKER_RUNNING,
-        "queue_length": len(JOB_QUEUE)
+        "active_downloads": running,
+        "max_concurrent": MAX_CONCURRENT
     }
 
 @app.post("/api/download")
 def queue_download(url: str = Form(...)):
-    global IS_WORKER_RUNNING
-
     # --- DETERMINE JOB TYPE ---
     job_type = "unknown"
     if "thenkiri.com" in url:
@@ -123,25 +112,17 @@ def queue_download(url: str = Form(...)):
     else:
         return {"status": "error", "message": "URL not supported (only Thenkiri & AnimePahe)."}
     # --------------------------
-    
-    job_id = f"job-{int(time.time())}" 
+
+    job_id = f"job-{int(time.time())}"
     job_data = {"id": job_id, "url": url, "type": job_type}
-    
-    JOB_QUEUE.append(job_data)
+
     ACTIVE_JOBS[job_id] = "QUEUED"
-    position = len(JOB_QUEUE)
-    
-    print(f"\n📥 Job added ({job_type}). Position: {position}")
+    executor.submit(run_single_job, job_data)
 
-    if not IS_WORKER_RUNNING:
-        IS_WORKER_RUNNING = True
-        t = threading.Thread(target=process_queue_worker)
-        t.start()
-        msg = "Download started immediately."
-    else:
-        msg = f"Added to queue. Position: {position}"
+    running = sum(1 for s in ACTIVE_JOBS.values() if s == "RUNNING")
+    print(f"\n📥 Job submitted ({job_type}). Active downloads: {running}/{MAX_CONCURRENT}")
 
-    return {"status": "success", "message": msg, "job_id": job_id, "queue_position": position}
+    return {"status": "success", "message": "Download started immediately.", "job_id": job_id, "queue_position": 0}
 
 if __name__ == "__main__":
     import uvicorn
